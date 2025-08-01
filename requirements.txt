@@ -1,0 +1,6 @@
+prefect
+pandas
+requests
+sqalchemy
+sqlite3
+psycopg2-binary
