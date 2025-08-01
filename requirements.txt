@@ -1,6 +1,6 @@
 prefect
 pandas
-requests
-sqalchemy
-sqlite3
+httpx
+sqlalchemy
 psycopg2-binary
+python-dotenv
