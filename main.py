@@ -8,12 +8,10 @@ from prefect import flow, task, get_run_logger
 import httpx
 from httpx import HTTPStatusError, TimeoutException, RequestError
 from pathlib import Path
+from typing import Any, Dict, List, Union
 import psycopg2
 import pandas as pd
 import json
-
-# Load environment variables
-
 
 # Get environment variables
 api_key = os.getenv("OPENWEATHERMAP_API_KEY")
@@ -103,14 +101,45 @@ def get_current_weather(city: str, api_key: str, units: str = 'metric') -> dict:
     except Exception as e:
         logger.error(f"Unexpected error for {city}: {str(e)}")
         raise
+    
+    return data
 
 # ---------------------------------------------------------------------------
 # Transform – flatten json, extract columsn, rename, and custom calcs
 # ---------------------------------------------------------------------------
+@task
+def flatten_nested_dict(data: Union[Dict, List[Dict]], sep: str = '_') -> pd.DataFrame:
+    """
+    Use pandas json_normalize with recursive flattening for complete flattening.
+    """
+    def pre_flatten_lists(obj):
+        """Pre-process to flatten list items before json_normalize"""
+        if isinstance(obj, dict):
+            result = {}
+            for key, value in obj.items():
+                if isinstance(value, list) and value and isinstance(value[0], dict):
+                    # Flatten each dict in the list
+                    for i, item in enumerate(value):
+                        flattened_item = pre_flatten_lists(item)
+                        for sub_key, sub_value in flattened_item.items():
+                            result[f"{key}_{i}_{sub_key}"] = sub_value
+                elif isinstance(value, dict):
+                    # Recursively handle nested dicts
+                    flattened_nested = pre_flatten_lists(value)
+                    for sub_key, sub_value in flattened_nested.items():
+                        result[f"{key}_{sub_key}"] = sub_value
+                else:
+                    result[key] = value
+            return result
+        return obj
+    
+    if isinstance(data, dict):
+        flattened = pre_flatten_lists(data)
+        return pd.DataFrame([flattened])
+    elif isinstance(data, list):
+        flattened_list = [pre_flatten_lists(item) for item in data] 
+        return pd.DataFrame(flattened_list)
 
-@task(retries=3, retry_delay_seconds=30)
-def clean_weather_data(weather_data: dict) -> dict:
-    pass
 
 @flow(name="Weather ETL Pipeline")
 def weather_pipeline():
@@ -125,12 +154,16 @@ def weather_pipeline():
     for city in cities:
         try:
             data = get_current_weather(city, api_key)
-            all_weather_data.append(data)
+            flat_data = flatten_nested_dict(data)
+            all_weather_data.append(flat_data)
 
         except Exception as e:
             logger.error(f"Failed to process {city}: {e}")
             continue
-
+    
+    for i, df in enumerate(all_weather_data):
+        print(f"\nFlattened weather data for city {i+1}:")
+        print(df.head(1).transpose())
 
 
 if __name__ == "__main__":
