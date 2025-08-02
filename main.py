@@ -140,6 +140,25 @@ def flatten_nested_dict(data: Union[Dict, List[Dict]], sep: str = '_') -> pd.Dat
         flattened_list = [pre_flatten_lists(item) for item in data] 
         return pd.DataFrame(flattened_list)
 
+column_mapping = {
+    'weather_0_main': 'weather',
+    'weather_0_description': 'description',
+    'main_temp': 'temperature',
+    'main_feels_like': 'feels_like',
+    'main_humidity': 'humidity',
+    'wind_speed': 'wind_speed',
+    'sys_country': 'country',
+    'name': 'city'
+}
+
+@task 
+def extract_rename_columns(df: pd.DataFrame, column_mapping: Dict[str, str]) -> pd.DataFrame:
+    missing_cols = [col for col in column_mapping.keys() if col not in df.columns]
+    if missing_cols:
+        raise KeyError(f"Missing columns in DataFrame: {missing_cols}")
+    
+    return df[list(column_mapping.keys())].rename(columns=column_mapping)
+
 
 @flow(name="Weather ETL Pipeline")
 def weather_pipeline():
@@ -156,14 +175,16 @@ def weather_pipeline():
             data = get_current_weather(city, api_key)
             flat_data = flatten_nested_dict(data)
             all_weather_data.append(flat_data)
-
+            
+            if all_weather_data:
+                combined_df = pd.concat(all_weather_data, ignore_index=True)
+                final_data = extract_rename_columns(combined_df, column_mapping)
+        
         except Exception as e:
             logger.error(f"Failed to process {city}: {e}")
             continue
     
-    for i, df in enumerate(all_weather_data):
-        print(f"\nFlattened weather data for city {i+1}:")
-        print(df.head(1).transpose())
+    print(f"Updated column names for final dataset: {final_data.columns}")
 
 
 if __name__ == "__main__":
