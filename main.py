@@ -37,7 +37,7 @@ if not base_url:
 # ---------------------------------------------------------------------------
 
 @task(retries=3, retry_delay_seconds=10)
-def get_current_weather(city: str, api_key: str, units: str = 'metric') -> dict:
+def get_current_weather(city: str, api_key: str, units: str = 'imperial') -> dict:
     """Fech current weather data from a given city using OpenWeatherMap API
     
         Args:
@@ -159,6 +159,57 @@ def extract_rename_columns(df: pd.DataFrame, column_mapping: Dict[str, str]) -> 
     
     return df[list(column_mapping.keys())].rename(columns=column_mapping)
 
+# ---------------------------------------------------------------------------
+# Load – insert cleaned OpenWeatherMap data into weather_data database
+# ---------------------------------------------------------------------------
+
+@task
+def insert_data_into_db(final_data: pd.DataFrame):
+
+    # Connect to PostgreSQL
+    conn = psycopg2.connect(
+        host=os.getenv("DB_HOST"),
+        port=os.getenv("DB_PORT"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+        dbname=os.getenv("DB_NAME")
+    )
+    cursor = conn.cursor()
+
+    # Optional: create table if not exists
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS weather_data (
+        id SERIAL PRIMARY KEY,
+        city TEXT,
+        country TEXT,
+        weather TEXT,
+        description TEXT,
+        temperature REAL,
+        wind_speed REAL,
+        humidity INTEGER,
+        feels_like REAL,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
+
+    column_order = [
+    "city", "country", "weather", "description",
+    "temperature", "wind_speed", "humidity", "feels_like"
+    ]
+    
+    final_data = final_data[column_order].astype(object)
+    rows = list(final_data.itertuples(index=False, name=None))
+
+    # Insert all rows
+    insert_query = '''
+    INSERT INTO weather_data (city, country, weather, description, temperature, wind_speed, humidity, feels_like)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    '''
+
+    cursor.executemany(insert_query, rows)
+    conn.commit()
+    cursor.close()
+    conn.close()
 
 @flow(name="Weather ETL Pipeline")
 def weather_pipeline():
@@ -180,6 +231,8 @@ def weather_pipeline():
                 combined_df = pd.concat(all_weather_data, ignore_index=True)
                 final_data = extract_rename_columns(combined_df, column_mapping)
         
+            insert_data_into_db(final_data)
+
         except Exception as e:
             logger.error(f"Failed to process {city}: {e}")
             continue
